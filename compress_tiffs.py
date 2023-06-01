@@ -5,7 +5,7 @@ import tifffile
 from tqdm import tqdm
 
 
-def compress_tiff_files(input_path, quality, compression):
+def compress_tiff_files(input_path, quality, compression, threads):
     """
     Compresses the TIFF files in the given input path (folder or file) using the specified compression algorithm and quality percentage.
     Creates a new compressed TIFF file with the name '.part' and replaces the original file(s).
@@ -24,7 +24,7 @@ def compress_tiff_files(input_path, quality, compression):
                 try:
                     # Compress the TIFF file using the specified algorithm and quality
                     with tifffile.TiffWriter(temp_file_path) as tiff:
-                        tiff.write(tifffile.imread(file_path), compression=(compression, quality))
+                        tiff.write(tifffile.imread(file_path), compression=(compression, quality), maxworkers=threads)
 
                     # Replace the original file with the compressed file
                     shutil.move(temp_file_path, file_path)
@@ -40,7 +40,7 @@ def compress_tiff_files(input_path, quality, compression):
         try:
             # Compress the TIFF file using the specified algorithm and quality
             with tifffile.TiffWriter(temp_file_path) as tiff:
-                tiff.write(tifffile.imread(file_path), compression=(compression, quality))
+                tiff.write(tifffile.imread(file_path), compression=(compression, quality), maxworkers=threads)
 
             # Replace the original file with the compressed file
             shutil.move(temp_file_path, file_path)
@@ -68,10 +68,15 @@ if __name__ == '__main__':
                         type=int,
                         help="Compression quality percentage (0-100). Required for jpeg_2000_lossy compression.", 
                         default=85)
+    parser.add_argument(
+                        '--threads', 
+                        type=int,
+                        help="Maximum number of threads to use (should be less that CPU cores).", 
+                        default=None)
 
     args = parser.parse_args()
 
     if args.folder:
-        compress_tiff_files(args.folder, args.quality, args.compression)
+        compress_tiff_files(args.folder, args.quality, args.compression, args.threads)
     elif args.file:
-        compress_tiff_files(args.file, args.quality, args.compression)
+        compress_tiff_files(args.file, args.quality, args.compression, args.threads)
