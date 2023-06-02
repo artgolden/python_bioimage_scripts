@@ -3,7 +3,6 @@ import argparse
 import shutil
 import tifffile
 from tqdm import tqdm
-from gooey import Gooey
 
 
 def compress_tiff_files(input_path, quality, compression, threads, cache_dir, replace_files):
@@ -70,7 +69,6 @@ def compress_tiff_files(input_path, quality, compression, threads, cache_dir, re
             print(e)
 
 
-@Gooey
 def main():
     parser = argparse.ArgumentParser(description="Compress TIFF files using different compression algorithms.")
     group = parser.add_mutually_exclusive_group(required=True)
