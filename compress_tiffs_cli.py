@@ -28,7 +28,6 @@ def compress_one_file(file_path, pbar, quality, compression, threads, cache_dir,
                         os.remove(temp_file_path)
                 else:
                     print(f"Error compressing: {file_path}\n" + str(e))
-            pbar.update(1)
             print(f"Compressed: {file_path}")
         if replace_files:
             # Replace the original file with the compressed file
