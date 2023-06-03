@@ -40,8 +40,8 @@ def compress_one_file(file_path, pbar, quality, compression, threads, cache_dir,
                     pass
                 else:
                     print(f"Error compressing: {file_path}\n" + str(e))
-            pbar.update(1)
-            print(f"Compressed: {file_path}")
+        pbar.update(1)
+        print(f"Compressed: {file_path}")
     except Exception as e:
         print(f"Error compressing: {file_path}")
         print(e)
