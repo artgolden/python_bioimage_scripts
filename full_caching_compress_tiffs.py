@@ -137,9 +137,9 @@ def compress_tiff_files(input_path, cache_dir, *args):
                 if file_path not in already_compressed_files:
                     remote_file_paths.append(file_path)
 
+    with tqdm(total=len(remote_file_paths) + len(already_compressed_files), ncols=80, desc="Progress") as pbar:
 
-    with tqdm(total=len(remote_file_paths), ncols=80, desc="Progress") as pbar:
-
+        pbar.update(len(already_compressed_files))
 
         # Copy files to the local cache buffer asynchronously
         copy_thread = threading.Thread(target=copy_files_to_cache, args=(remote_file_paths, cache_dir, cache_queue, semaphore))
