@@ -9,6 +9,8 @@ import queue
 from gooey import Gooey
 
 MAX_FILES_IN_CACHE = 3
+COMPRESSION_RATIO_THRESHOLD = 1.5
+COMPRESSED_FILES_FILE = "_already_compressed_files"
 
 
 def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
@@ -24,11 +26,12 @@ def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
             cache_queue.put((cache_file_path, remote_file_path))
             print(f"Cached file: {cache_file_path}")
         except OSError as e:
-            print(f"Failed to cache the file. {e}")
+            print(f"ERROR: Failed to cache the file. {e}")
 
 
-
-def compress_one_file(remote_file_paths, pbar, cache_queue, semaphore, quality, compression, threads, replace_files):
+def compress_one_file(
+        remote_file_paths, pbar, cache_queue: queue.Queue, semaphore, done_paths_file, quality, compression, threads,
+        replace_files,):
 
     processed_files = 0
     while processed_files < len(remote_file_paths):
@@ -48,39 +51,46 @@ def compress_one_file(remote_file_paths, pbar, cache_queue, semaphore, quality, 
                 tiff.write(tifffile.imread(cached_file_path), compression=(compression, quality), maxworkers=threads)
             os.remove(cached_file_path)
             compressed_file_size = os.path.getsize(temp_cached_file_path)
+            compression_ratio =  float(original_file_size) / compressed_file_size
 
-            try:
-                # Move the compressed file from the temporary cache directory to the final destination
-                shutil.move(temp_cached_file_path, temp_remote_file_path)
-            except OSError as e:
-                # That is a workaround when shutil is raising an error when copying file to samba share where you can't copy permissions
-                if e.errno == 95:
-                    if os.path.isfile(temp_cached_file_path):
-                        os.remove(temp_cached_file_path)
-                else:
-                    print(f"Error compressing: {remote_file_path}\n" + str(e))
-            if replace_files:
-                # Replace the original file with the compressed file
+            if compression_ratio > COMPRESSION_RATIO_THRESHOLD:
                 try:
-                    shutil.move(temp_remote_file_path, remote_file_path)
+                    # Move the compressed file from the temporary cache directory to the final destination
+                    shutil.move(temp_cached_file_path, temp_remote_file_path)
                 except OSError as e:
+                    # That is a workaround when shutil is raising an error when copying file to samba share where you can't copy permissions
                     if e.errno == 95:
-                        pass
+                        if os.path.isfile(temp_cached_file_path):
+                            os.remove(temp_cached_file_path)
                     else:
                         print(f"Error compressing: {remote_file_path}\n" + str(e))
-
-            compression_ratio =  float(original_file_size) / compressed_file_size
-            print(f"\nCompressed: {remote_file_path}, compression ratio: {round(compression_ratio, 2)}x")
+                if replace_files:
+                    # Replace the original file with the compressed file
+                    try:
+                        shutil.move(temp_remote_file_path, remote_file_path)
+                    except OSError as e:
+                        if e.errno == 95:
+                            pass
+                        else:
+                            print(f"Error compressing: {remote_file_path}\n" + str(e))
+                print(f"Compressed: {remote_file_path}, compression ratio: {round(compression_ratio, 2)}x")
+            else:
+                print(f"Compression ratio is below {COMPRESSION_RATIO_THRESHOLD}, skipping file {remote_file_path}")
+                os.remove(temp_cached_file_path)
+            
+            with open(done_paths_file, 'a') as f:
+                f.write(remote_file_path + "\n")
         except Exception as e:
             print(f"Error compressing: {remote_file_path}")
             print(e)
             
         # Release the semaphore after the compressed file has been copied to the remote location
-        semaphore.release()
 
         # Mark the file task as done in the cache queue
         cache_queue.task_done()
         pbar.update(1)
+        print("")
+        semaphore.release()
         processed_files += 1
 
 
@@ -104,12 +114,29 @@ def compress_tiff_files(input_path, cache_dir, *args):
     # Create a semaphore to control the cache size
     semaphore = threading.Semaphore(MAX_FILES_IN_CACHE)
 
+    done_paths_file = os.path.join(input_path, COMPRESSED_FILES_FILE)
+    already_compressed_files = set()
+    if os.path.exists(done_paths_file):
+        with open(done_paths_file, 'r') as file:
+            for line in file:
+                file_path = line.strip()
+                already_compressed_files.add(file_path)
+        if already_compressed_files:
+            print(f"Skipping already compressed files listed in {done_paths_file}")
+    else:
+        with open(done_paths_file, 'w'):
+            pass
+                
+
 
     remote_file_paths = []
     for root, _, files in os.walk(input_path):
         for file in files:
             if file.endswith('.tiff') or file.endswith('.tif'):
-                remote_file_paths.append(os.path.join(root, file))
+                file_path = os.path.join(root, file)
+                if file_path not in already_compressed_files:
+                    remote_file_paths.append(file_path)
+
 
     with tqdm(total=len(remote_file_paths), ncols=80, desc="Progress") as pbar:
 
@@ -119,7 +146,8 @@ def compress_tiff_files(input_path, cache_dir, *args):
         copy_thread.start()
 
         # Process files from the cache queue
-        process_thread = threading.Thread(target=compress_one_file, args=(remote_file_paths, pbar, cache_queue, semaphore, *args))
+        process_thread = threading.Thread(target=compress_one_file, args=(
+            remote_file_paths, pbar, cache_queue, semaphore, done_paths_file, *args))
         process_thread.start()
 
         # Wait for all files to be processed
