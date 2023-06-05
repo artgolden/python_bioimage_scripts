@@ -17,13 +17,15 @@ def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
 
         # Acquire the semaphore before adding the local file path to the cache queue
         semaphore.acquire()
+        try:
+            # Download the file from the remote location to the local cache folder
+            shutil.copy2(remote_file_path, cache_file_path)
+            # Add the local file path to the cache queue
+            cache_queue.put((cache_file_path, remote_file_path))
+            print(f"Cached file: {cache_file_path}")
+        except OSError as e:
+            print(f"Failed to cache the file. {e}")
 
-        # Download the file from the remote location to the local cache folder
-        shutil.copy2(remote_file_path, cache_file_path)
-
-        # Add the local file path to the cache queue
-        cache_queue.put((cache_file_path, remote_file_path))
-        print(f"Cached file: {cache_file_path}")
 
 
 def compress_one_file(remote_file_paths, pbar, cache_queue, semaphore, quality, compression, threads, replace_files):
