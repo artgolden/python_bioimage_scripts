@@ -41,7 +41,13 @@ def compress_one_file(
         
         cached_file_path, remote_file_path = cache_queue.get()
         temp_cached_file_path = cached_file_path + '.part'
-        temp_remote_file_path = remote_file_path + '.part'
+        remote_dir_with_file = os.path.dirname(remote_file_path)
+        if not replace_files:
+            compressed_dir = os.path.join(remote_dir_with_file, "_compressed_files")
+            os.makedirs(compressed_dir, exist_ok=True)
+            temp_remote_file_path = os.path.join(compressed_dir, os.path.basename(remote_file_path))
+        else:
+            temp_remote_file_path = remote_file_path + '.part'
 
 
         try:
