@@ -1,3 +1,5 @@
 *.tif
 launch.json
 *.log
+*.sh
+*.part
