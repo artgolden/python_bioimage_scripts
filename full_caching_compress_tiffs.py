@@ -3,13 +3,14 @@ import os
 import argparse
 import shutil
 import time
+import uuid
 import pkg_resources
 import tifffile
 from tqdm import tqdm
 import threading
 import queue
 import logging
-from gooey import Gooey
+# from gooey import Gooey
 
 MAX_FILES_IN_CACHE = 3
 COMPRESSION_RATIO_THRESHOLD = 1.5
@@ -25,6 +26,8 @@ def logging_broadcast(string):
 def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
     for remote_file_path in remote_files:
         cache_file_path = os.path.join(cache_dir, os.path.basename(remote_file_path))
+        if os.path.basename(remote_file_path) in os.listdir(cache_dir):
+            cache_file_path += "_" + uuid.uuid4().hex
 
         # Acquire the semaphore before adding the local file path to the cache queue
         semaphore.acquire()
@@ -212,7 +215,7 @@ def compress_tiff_files(input_path, cache_dir, *args):
         process_thread.join()
 
 
-@Gooey
+# @Gooey
 def main():
     parser = argparse.ArgumentParser(description="Compress TIFF files using different compression algorithms.")
     group = parser.add_mutually_exclusive_group(required=True)
