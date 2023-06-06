@@ -3,6 +3,7 @@ import os
 import argparse
 import shutil
 import time
+import pkg_resources
 import tifffile
 from tqdm import tqdm
 import threading
@@ -12,7 +13,9 @@ import logging
 
 MAX_FILES_IN_CACHE = 3
 COMPRESSION_RATIO_THRESHOLD = 1.5
+PROCESSING_THEAD_TIMEOUT = 100
 COMPRESSED_FILES_FILE = "_already_compressed_files"
+COMPRESSED_FOLDER = "_compressed_files"
 
 
 def logging_broadcast(string):
@@ -31,7 +34,7 @@ def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
             # Add the local file path to the cache queue
             cache_queue.put((cache_file_path, remote_file_path))
             logging_broadcast(f"Cached file: {cache_file_path}")
-        except OSError as e:
+        except Exception as e:
             logging_broadcast(f"ERROR: Failed to cache the file. {e}")
 
 
@@ -40,61 +43,88 @@ def compress_one_file(
         replace_files,):
 
     processed_files = 0
+    timeout = PROCESSING_THEAD_TIMEOUT
     while processed_files < len(remote_file_paths):
         if cache_queue.empty():
             time.sleep(1)
+            timeout -= 1
+            if timeout < 0:
+                logging_broadcast("FATAL ERROR: Processing thread reached a timeout!")
+                exit(1)
             continue
+        timeout = PROCESSING_THEAD_TIMEOUT
         
         cached_file_path, remote_file_path = cache_queue.get()
         temp_cached_file_path = cached_file_path + '.part'
         remote_dir_with_file = os.path.dirname(remote_file_path)
         if not replace_files:
-            compressed_dir = os.path.join(remote_dir_with_file, "_compressed_files")
+            compressed_dir = os.path.join(remote_dir_with_file, COMPRESSED_FOLDER)
             os.makedirs(compressed_dir, exist_ok=True)
             temp_remote_file_path = os.path.join(compressed_dir, os.path.basename(remote_file_path))
         else:
             temp_remote_file_path = remote_file_path + '.part'
 
-
+        error_compressing = False
         try:
             original_file_size = os.path.getsize(cached_file_path)
             # Compress the TIFF file using the specified algorithm and quality
+            tifffile_version = pkg_resources.get_distribution("tifffile").version
             with tifffile.TiffWriter(temp_cached_file_path) as tiff:
-                tiff.write(tifffile.imread(cached_file_path), compression=compression, compressionargs={'level': quality}, maxworkers=threads)
-            os.remove(cached_file_path)
-            compressed_file_size = os.path.getsize(temp_cached_file_path)
-            compression_ratio =  float(original_file_size) / compressed_file_size
-
-            if compression_ratio > COMPRESSION_RATIO_THRESHOLD:
-                try:
-                    # Move the compressed file from the temporary cache directory to the final destination
-                    shutil.move(temp_cached_file_path, temp_remote_file_path)
-                except OSError as e:
-                    # That is a workaround when shutil is raising an error when copying file to samba share where you can't copy permissions
-                    if e.errno == 95:
-                        if os.path.isfile(temp_cached_file_path):
-                            os.remove(temp_cached_file_path)
+                if tifffile_version > "2022.7.28":
+                    if compression == "jpeg_2000_lossy":
+                        tiff.write(tifffile.imread(cached_file_path), compression=compression, compressionargs={'level': quality}, maxworkers=threads)
                     else:
-                        logging_broadcast(f"Error compressing: {remote_file_path}\n" + str(e))
-                if replace_files:
-                    # Replace the original file with the compressed file
-                    try:
-                        shutil.move(temp_remote_file_path, remote_file_path)
-                    except OSError as e:
-                        if e.errno == 95:
-                            pass
-                        else:
-                            logging_broadcast(f"Error compressing: {remote_file_path}\n" + str(e))
-                logging_broadcast(f"Compressed: {remote_file_path}, compression ratio: {round(compression_ratio, 2)}x")
-            else:
-                logging_broadcast(f"Compression ratio is below {COMPRESSION_RATIO_THRESHOLD}, skipping file {remote_file_path}")
-                os.remove(temp_cached_file_path)
-            
-            with open(done_paths_file, 'a') as f:
-                f.write(remote_file_path + "\n")
+                        tiff.write(tifffile.imread(cached_file_path), compression=compression, maxworkers=threads)
+                else:
+                    tiff.write(tifffile.imread(cached_file_path), compression=(compression, quality), maxworkers=threads)
         except Exception as e:
             logging_broadcast(f"Error compressing: {remote_file_path}")
             logging_broadcast(e)
+            error_compressing = True          
+            if os.path.exists(temp_cached_file_path):
+                os.remove(temp_cached_file_path)  
+            cache_queue.task_done()
+            pbar.update(1)
+            logging_broadcast("")
+            semaphore.release()
+            processed_files += 1
+            continue
+
+        os.remove(cached_file_path)
+        compressed_file_size = os.path.getsize(temp_cached_file_path)
+        compression_ratio =  float(original_file_size) / compressed_file_size
+
+
+        if compression_ratio > COMPRESSION_RATIO_THRESHOLD:
+            try:
+                # Move the compressed file from the temporary cache directory to the final destination
+                shutil.move(temp_cached_file_path, temp_remote_file_path)
+            except OSError as e:
+                # That is a workaround when shutil is raising an error when copying file to samba share where you can't copy permissions
+                if e.errno == 95:
+                    if os.path.isfile(temp_cached_file_path):
+                        os.remove(temp_cached_file_path)
+                else:
+                    logging_broadcast(f"Error compressing: {remote_file_path}\n" + str(e))
+                    error_compressing = True
+            if replace_files and error_compressing == False:
+                # Replace the original file with the compressed file
+                try:
+                    shutil.move(temp_remote_file_path, remote_file_path)
+                except OSError as e:
+                    if e.errno == 95:
+                        pass
+                    else:
+                        logging_broadcast(f"Error compressing: {remote_file_path}\n" + str(e))
+                        error_compressing = True
+            logging_broadcast(f"Compressed: {remote_file_path}, compression ratio: {round(compression_ratio, 2)}x")
+        else:
+            logging_broadcast(f"Compression ratio is below {COMPRESSION_RATIO_THRESHOLD}, skipping file {remote_file_path}")
+            os.remove(temp_cached_file_path)
+        
+        if error_compressing == False:
+            with open(done_paths_file, 'a') as f:
+                f.write(remote_file_path + "\n")
             
         # Release the semaphore after the compressed file has been copied to the remote location
 
@@ -150,7 +180,9 @@ def compress_tiff_files(input_path, cache_dir, *args):
 
 
     remote_file_paths = []
-    for root, _, files in os.walk(input_path):
+    for root, dirs, files in os.walk(input_path):
+        if COMPRESSED_FOLDER in dirs:
+            dirs.remove(COMPRESSED_FOLDER)
         for file in files:
             if file.endswith('.tiff') or file.endswith('.tif'):
                 file_path = os.path.join(root, file)
@@ -160,6 +192,8 @@ def compress_tiff_files(input_path, cache_dir, *args):
     with tqdm(total=len(remote_file_paths) + len(already_compressed_files), ncols=80, desc="Progress") as pbar:
 
         pbar.update(len(already_compressed_files))
+        pbar.refresh()
+        print("")
 
         # Copy files to the local cache buffer asynchronously
         copy_thread = threading.Thread(target=copy_files_to_cache, args=(remote_file_paths, cache_dir, cache_queue, semaphore))
