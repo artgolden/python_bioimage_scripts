@@ -1,3 +1,4 @@
+from datetime import datetime
 import os
 import argparse
 import shutil
@@ -6,12 +7,17 @@ import tifffile
 from tqdm import tqdm
 import threading
 import queue
-from gooey import Gooey
+import logging
+# from gooey import Gooey
 
 MAX_FILES_IN_CACHE = 3
 COMPRESSION_RATIO_THRESHOLD = 1.5
 COMPRESSED_FILES_FILE = "_already_compressed_files"
 
+
+def logging_broadcast(string):
+	print(string)
+	logging.info(string)
 
 def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
     for remote_file_path in remote_files:
@@ -24,9 +30,9 @@ def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
             shutil.copy2(remote_file_path, cache_file_path)
             # Add the local file path to the cache queue
             cache_queue.put((cache_file_path, remote_file_path))
-            print(f"Cached file: {cache_file_path}")
+            logging_broadcast(f"Cached file: {cache_file_path}")
         except OSError as e:
-            print(f"ERROR: Failed to cache the file. {e}")
+            logging_broadcast(f"ERROR: Failed to cache the file. {e}")
 
 
 def compress_one_file(
@@ -54,7 +60,7 @@ def compress_one_file(
             original_file_size = os.path.getsize(cached_file_path)
             # Compress the TIFF file using the specified algorithm and quality
             with tifffile.TiffWriter(temp_cached_file_path) as tiff:
-                tiff.write(tifffile.imread(cached_file_path), compression=(compression, quality), maxworkers=threads)
+                tiff.write(tifffile.imread(cached_file_path), compression=compression, compressionargs={'level': quality}, maxworkers=threads)
             os.remove(cached_file_path)
             compressed_file_size = os.path.getsize(temp_cached_file_path)
             compression_ratio =  float(original_file_size) / compressed_file_size
@@ -69,7 +75,7 @@ def compress_one_file(
                         if os.path.isfile(temp_cached_file_path):
                             os.remove(temp_cached_file_path)
                     else:
-                        print(f"Error compressing: {remote_file_path}\n" + str(e))
+                        logging_broadcast(f"Error compressing: {remote_file_path}\n" + str(e))
                 if replace_files:
                     # Replace the original file with the compressed file
                     try:
@@ -78,24 +84,24 @@ def compress_one_file(
                         if e.errno == 95:
                             pass
                         else:
-                            print(f"Error compressing: {remote_file_path}\n" + str(e))
-                print(f"Compressed: {remote_file_path}, compression ratio: {round(compression_ratio, 2)}x")
+                            logging_broadcast(f"Error compressing: {remote_file_path}\n" + str(e))
+                logging_broadcast(f"Compressed: {remote_file_path}, compression ratio: {round(compression_ratio, 2)}x")
             else:
-                print(f"Compression ratio is below {COMPRESSION_RATIO_THRESHOLD}, skipping file {remote_file_path}")
+                logging_broadcast(f"Compression ratio is below {COMPRESSION_RATIO_THRESHOLD}, skipping file {remote_file_path}")
                 os.remove(temp_cached_file_path)
             
             with open(done_paths_file, 'a') as f:
                 f.write(remote_file_path + "\n")
         except Exception as e:
-            print(f"Error compressing: {remote_file_path}")
-            print(e)
+            logging_broadcast(f"Error compressing: {remote_file_path}")
+            logging_broadcast(e)
             
         # Release the semaphore after the compressed file has been copied to the remote location
 
         # Mark the file task as done in the cache queue
         cache_queue.task_done()
         pbar.update(1)
-        print("")
+        logging_broadcast("")
         semaphore.release()
         processed_files += 1
 
@@ -114,6 +120,14 @@ def compress_tiff_files(input_path, cache_dir, *args):
         return True
 
 
+    now = datetime.now()
+    dt_string = now.strftime("%Y-%b-%d-%H%M%S")
+    logging.basicConfig(filename=os.path.join(input_path, "%s-tiff_compression.log" % dt_string),
+					 filemode='w',
+					 format='%(asctime)s-%(levelname)s - %(message)s',
+					 datefmt='%d-%b-%y %H:%M:%S',
+					 level=logging.INFO)
+
     # Create a cache queue for the local file paths
     cache_queue = queue.Queue()
     
@@ -128,7 +142,7 @@ def compress_tiff_files(input_path, cache_dir, *args):
                 file_path = line.strip()
                 already_compressed_files.add(file_path)
         if already_compressed_files:
-            print(f"Skipping already compressed files listed in {done_paths_file}")
+            logging_broadcast(f"Skipping already compressed files listed in {done_paths_file}")
     else:
         with open(done_paths_file, 'w'):
             pass
@@ -164,7 +178,7 @@ def compress_tiff_files(input_path, cache_dir, *args):
         process_thread.join()
 
 
-@Gooey
+# @Gooey
 def main():
     parser = argparse.ArgumentParser(description="Compress TIFF files using different compression algorithms.")
     group = parser.add_mutually_exclusive_group(required=True)
