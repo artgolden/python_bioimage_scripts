@@ -20,8 +20,8 @@ COMPRESSED_FOLDER = "_compressed_files"
 
 
 def logging_broadcast(string):
-	print(string)
-	logging.info(string)
+    print(string)
+    logging.info(string)
 
 def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
     for remote_file_path in remote_files:
@@ -31,6 +31,16 @@ def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
 
         # Acquire the semaphore before adding the local file path to the cache queue
         semaphore.acquire()
+
+        remote_disconnect_timeout_sec = 60
+        while remote_disconnect_timeout_sec > 0 and not os.path.exists(remote_file_path):
+            time.sleep(1)
+            print(f"Remote file path still does not exist!")
+            remote_disconnect_timeout_sec -= 1
+        if remote_disconnect_timeout_sec < 0:
+            logging_broadcast("FATAL ERROR: Reached timeout while waiting for remote share to reconnect.")
+            exit(1) 
+
         try:
             # Download the file from the remote location to the local cache folder
             shutil.copy2(remote_file_path, cache_file_path)
@@ -86,12 +96,13 @@ def compress_one_file(
             error_compressing = True          
             if os.path.exists(temp_cached_file_path):
                 os.remove(temp_cached_file_path)  
+            if os.path.exists(cached_file_path):
+                os.remove(cached_file_path)  
             cache_queue.task_done()
             pbar.update(1)
             logging_broadcast("")
             semaphore.release()
             processed_files += 1
-            continue
 
         os.remove(cached_file_path)
         compressed_file_size = os.path.getsize(temp_cached_file_path)
@@ -155,11 +166,11 @@ def compress_tiff_files(input_path, cache_dir, *args):
 
     now = datetime.now()
     dt_string = now.strftime("%Y-%b-%d-%H%M%S")
-    logging.basicConfig(filename=os.path.join(input_path, "%s-tiff_compression.log" % dt_string),
-					 filemode='w',
-					 format='%(asctime)s-%(levelname)s - %(message)s',
-					 datefmt='%d-%b-%y %H:%M:%S',
-					 level=logging.INFO)
+    logging.basicConfig(filename=os.path.join(cache_dir, "%s-tiff_compression.log" % dt_string),
+                     filemode='w',
+                     format='%(asctime)s-%(levelname)s - %(message)s',
+                     datefmt='%d-%b-%y %H:%M:%S',
+                     level=logging.INFO)
 
     # Create a cache queue for the local file paths
     cache_queue = queue.Queue()
