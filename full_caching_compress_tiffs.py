@@ -237,7 +237,7 @@ def main():
         '-C',
         '--compression',
         choices=['jpeg_2000_lossy', 'zlib', 'lzw'],
-        default='jpeg_2000_lossy',
+        default='zlib',
         help="Compression algorithm (default: jpeg_2000_lossy)")
     parser.add_argument(
         '-Q',
