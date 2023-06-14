@@ -103,8 +103,10 @@ def compress_one_file(
             logging_broadcast("")
             semaphore.release()
             processed_files += 1
+            continue
 
         os.remove(cached_file_path)
+        
         compressed_file_size = os.path.getsize(temp_cached_file_path)
         compression_ratio =  float(original_file_size) / compressed_file_size
 
