@@ -14,7 +14,8 @@ from gooey import Gooey
 
 MAX_FILES_IN_CACHE = 3
 COMPRESSION_RATIO_THRESHOLD = 1.5
-PROCESSING_THEAD_TIMEOUT = 100
+PROCESSING_THEAD_TIMEOUT_SEC = 1200
+REMOTE_DISCONNECTING_TIMEOUT_SEC = 600
 COMPRESSED_FILES_FILE = "_already_compressed_files"
 COMPRESSED_FOLDER = "_compressed_files"
 
@@ -32,10 +33,10 @@ def copy_files_to_cache(remote_files, cache_dir, cache_queue, semaphore):
         # Acquire the semaphore before adding the local file path to the cache queue
         semaphore.acquire()
 
-        remote_disconnect_timeout_sec = 60
+        remote_disconnect_timeout_sec = REMOTE_DISCONNECTING_TIMEOUT_SEC
         while remote_disconnect_timeout_sec > 0 and not os.path.exists(remote_file_path):
             time.sleep(1)
-            print(f"Remote file path still does not exist!")
+            if remote_disconnect_timeout_sec % 10 == 0: logging_broadcast(f"Remote file path still does not exist, looks like remote location disconnected!")
             remote_disconnect_timeout_sec -= 1
         if remote_disconnect_timeout_sec < 0:
             logging_broadcast("FATAL ERROR: Reached timeout while waiting for remote share to reconnect.")
@@ -56,7 +57,7 @@ def compress_one_file(
         replace_files,):
 
     processed_files = 0
-    timeout = PROCESSING_THEAD_TIMEOUT
+    timeout = PROCESSING_THEAD_TIMEOUT_SEC
     while processed_files < len(remote_file_paths):
         if cache_queue.empty():
             time.sleep(1)
@@ -65,7 +66,7 @@ def compress_one_file(
                 logging_broadcast("FATAL ERROR: Processing thread reached a timeout!")
                 exit(1)
             continue
-        timeout = PROCESSING_THEAD_TIMEOUT
+        timeout = PROCESSING_THEAD_TIMEOUT_SEC
         
         cached_file_path, remote_file_path = cache_queue.get()
         temp_cached_file_path = cached_file_path + '.part'
